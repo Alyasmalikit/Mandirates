@@ -1,22 +1,43 @@
-import json,os,re,csv,sys,html,datetime,collections
+import json,os,re,sys,html,datetime,collections,shutil,time
 from urllib.parse import urlencode
-from urllib.request import urlopen
-BASE=os.environ.get('SITE_URL','https://mandirates.pages.dev').rstrip('/')
-OUT=os.environ.get('OUT','site');DATA=os.environ.get('DATA','data/sample.json');KEY=os.environ.get('DATA_GOV_API_KEY','')
-RID='9ef84268-d588-465a-a308-a864a43d0070'  # Agmarknet daily mandi prices (verify on data.gov.in)
-e=lambda s:html.escape(str(s),quote=True)
+from urllib.request import urlopen,Request
+ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE=(os.environ.get('SITE_URL') or 'https://mandirates.pages.dev').rstrip('/')
+OUT=os.environ.get('OUT',os.path.join(ROOT,'site'));DATA=os.environ.get('DATA',os.path.join(ROOT,'data','sample.json'))
+SERIES_DIR=os.environ.get('SERIES_DIR',os.path.join(ROOT,'data','series'))
+KEY=os.environ.get('DATA_GOV_API_KEY') or os.environ.get('DATA_GOV_KEY') or ''
+MAX_PAGES=int(os.environ.get('MAX_PAGES','15000'));CONTACT=os.environ.get('CONTACT_EMAIL','')
+RID='9ef84268-d588-465a-a308-a864a43d0070';TESTLIVE=bool(os.environ.get('MR_TEST_LIVE'));DEMO=not(KEY or TESTLIVE);BUILD=str(int(time.time()))
+E=lambda s:html.escape(str(s),quote=True)
 def slug(s):return re.sub(r'[^a-z0-9]+','-',str(s).lower()).strip('-') or 'na'
-def fetch():
+def rs(v):return '₹'+format(int(v),',d')
+UA='Mozilla/5.0 (compatible; MandiRates-build/1.0)';WAIT=float(os.environ.get('RETRY_WAIT','3'));PROXY=os.environ.get('PRICES_PROXY','')
+def http_json(url,tries=3):
+    last=None
+    for i in range(tries):
+        try:
+            with urlopen(Request(url,headers={'User-Agent':UA,'Accept':'application/json'}),timeout=40) as r:return json.load(r)
+        except Exception as ex:
+            last=ex;time.sleep(WAIT*(i+1))
+    raise last
+def fetch_pages(make):
     rows=[];off=0
-    while off<30000:
-        q=urlencode({'api-key':KEY,'format':'json','limit':1000,'offset':off})
-        with urlopen(f'https://api.data.gov.in/resource/{RID}?{q}',timeout=30) as r:d=json.load(r)
-        rec=d.get('records',[])
+    while off<60000:
+        d=http_json(make(off));rec=d.get('records',[])
         if not rec:break
         rows+=rec;off+=1000
     return rows
+def fetch():
+    direct=lambda off:f'https://api.data.gov.in/resource/{RID}?'+urlencode({'api-key':KEY,'format':'json','limit':1000,'offset':off})
+    try:return fetch_pages(direct)
+    except Exception as e1:
+        proxy=PROXY or BASE+'/api/prices'
+        try:rows=fetch_pages(lambda off:proxy+'?'+urlencode({'limit':1000,'offset':off}))
+        except Exception as e2:raise Exception(f'direct fetch failed ({type(e1).__name__}) and the Cloudflare route failed ({type(e2).__name__})')
+        if not rows:raise Exception('the Cloudflare route returned no rows')
+        return rows
 def num(v):
-    try:return int(float(v))
+    try:return int(float(str(v).replace(',','')))
     except:return 0
 def dt(s):
     try:return datetime.datetime.strptime(str(s),'%d/%m/%Y')
@@ -27,58 +48,185 @@ def clean(raw):
         r={k.lower():v for k,v in r.items()}
         row=dict(state=str(r.get('state','')).strip(),district=str(r.get('district','')).strip(),market=str(r.get('market','')).strip(),commodity=str(r.get('commodity','')).strip(),variety=str(r.get('variety','')).strip(),date=str(r.get('arrival_date','')),mn=num(r.get('min_price')),mx=num(r.get('max_price')),md=num(r.get('modal_price')))
         if not(row['state'] and row['district'] and row['market'] and row['commodity']):continue
-        if row['md']<=0 or row['mn']<0 or row['mx']<row['mn']:continue   # drop zero / broken prices
+        if row['md']<=0 or row['mn']<0 or row['mx']<row['mn']:continue
         k=(row['state'],row['district'],row['market'],row['commodity'],row['variety'])
         if k not in best or dt(row['date'])>dt(best[k]['date']):best[k]=row
     return list(best.values())
-DEMO=not KEY
-def page(path,title,desc,crumbs,h1,lead,body,extra=None):
-    bl={"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":i+1,"name":n,"item":BASE+p} for i,(n,p) in enumerate(crumbs)]}
-    ld=json.dumps({"@context":"https://schema.org","@graph":[bl]+(extra or [])},ensure_ascii=False).replace('</','<\\/')
-    nav=' › '.join(f'<a href="{p}">{e(n)}</a>' for n,p in crumbs[:-1])
-    nav=(nav+' › ' if nav else '')+e(crumbs[-1][0])
-    demo='<p class="note">Demo data for testing. Live prices appear once the daily feed is connected.</p>' if DEMO else ''
-    h=f'''<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{e(title)}</title><meta name="description" content="{e(desc)}"><link rel="canonical" href="{BASE+path}">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
-<link rel="stylesheet" href="/style.css"><script type="application/ld+json">{ld}</script></head>
-<body><header><div><a href="/"><b>MandiRates</b></a></div></header><main>
-<nav aria-label="Breadcrumb" class="bc">{nav}</nav><h1>{e(h1)}</h1><p class="ans">{lead}</p>{demo}{body}</main>
-<footer>Source: Government of India open data (data.gov.in). Prices are indicative; confirm with the mandi before you trade. © MandiRates</footer></body></html>'''
-    p=os.path.join(OUT,path.strip('/'),'index.html');os.makedirs(os.path.dirname(p),exist_ok=True);open(p,'w',encoding='utf-8').write(h);return path
-def rs(v):return '₹'+format(v,',d')
+# ---------- history (series) ----------
+def merge_series(state,rows,iso):
+    p=os.path.join(SERIES_DIR,slug(state)+'.json');os.makedirs(SERIES_DIR,exist_ok=True)
+    try:data=json.load(open(p,encoding='utf-8'))
+    except:data={'d':[],'v':{}}
+    d,v=data['d'],data['v']
+    if d and iso<d[-1] and iso not in d:return data
+    if iso not in d:
+        d.append(iso)
+        for a in v.values():a.append(None)
+    i=d.index(iso)
+    for r in rows:
+        k=f"{r['market']}|{r['commodity']}|{r['variety']}";a=v.setdefault(k,[None]*len(d))
+        while len(a)<len(d):a.append(None)
+        a[i]=r['md']
+    if len(d)>30:
+        cut=len(d)-30;data['d']=d=d[cut:]
+        for k in list(v):
+            v[k]=v[k][cut:]
+            if all(x is None for x in v[k]):del v[k]
+    json.dump(data,open(p,'w',encoding='utf-8'),separators=(',',':'));return data
+def series_for(data,r):
+    a=data.get('v',{}).get(f"{r['market']}|{r['commodity']}|{r['variety']}");return a
+def svg_chart(vals,label):
+    pts=[(i,x) for i,x in enumerate(vals) if x is not None]
+    if len(pts)<3:return ''
+    mn=min(x for _,x in pts);mx=max(x for _,x in pts);sp=(mx-mn) or 1;n=max(1,len(vals)-1)
+    p=' '.join(f"{i*600/n:.1f},{142-(x-mn)/sp*120:.1f}" for i,x in pts)
+    return f'<svg class="sv" viewBox="0 0 600 150" role="img" aria-label="{E(label)}"><polyline points="{p}" fill="none" stroke="#1b6b3b" stroke-width="3" stroke-linejoin="round"/></svg><p class="mut">{len(pts)} days saved · low {rs(mn)} · high {rs(mx)}</p>'
+# ---------- page shell ----------
+CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
+NAV=[('Home','/','होम'),('Prices','/mandi-prices/','भाव'),('Compare','/compare/','तुलना'),('Tools','/tools/','टूल्स'),('Buy / Sell','/marketplace/','खरीद / बिक्री')]
+written=[]
+def write(path,content):
+    p=os.path.join(OUT,path.strip('/'),'index.html') if path.endswith('/') else os.path.join(OUT,path.lstrip('/'))
+    os.makedirs(os.path.dirname(p),exist_ok=True);open(p,'w',encoding='utf-8').write(content);written.append(path)
+def shell(path,title,desc,h1,lead,body,crumbs=None,ld=None,scripts=(),hero='',index=True,hi=None,connect=''):
+    graph=list(ld or [])
+    if crumbs:graph.append({"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":i+1,"name":n,"item":BASE+p} for i,(n,p) in enumerate(crumbs)]})
+    if path=='/':graph+= [{"@type":"WebSite","name":"MandiRates","url":BASE+'/'},{"@type":"Organization","name":"MandiRates","url":BASE+'/',"logo":BASE+'/icon-512.png'}]
+    ldj=json.dumps({"@context":"https://schema.org","@graph":graph},ensure_ascii=False).replace('</','<\\/') if graph else ''
+    nav=''.join(f'<a href="{u}"{" aria-current=\"page\"" if (u==path or (u!="/" and path.startswith(u))) else ""}>{E(n)}</a>' for n,u,h in NAV)
+    cr=''
+    if crumbs and len(crumbs)>1:cr='<div class="crumbs">'+' › '.join(f'<a href="{p}">{E(n)}</a>' for n,p in crumbs[:-1])+' › '+E(crumbs[-1][0])+'</div>'
+    robots='index,follow' if index else 'noindex,follow'
+    banner='<div class="note" id="dn" hidden></div>' if 'js/home.js' in scripts or 'js/tools.js' in scripts or 'js/compare.js' in scripts else ''
+    h1a=''
+    sc=''.join(f'<script src="/{s}" defer></script>' for s in ('logic.js','hi.js','app.js')+tuple(scripts))
+    return f'''<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{E(title)}</title><meta name="description" content="{E(desc)}"><link rel="canonical" href="{BASE+path}"><meta name="robots" content="{robots}">
+<meta http-equiv="Content-Security-Policy" content="{CSP if not connect else CSP.replace("connect-src 'self'","connect-src 'self' "+connect)}"><meta name="theme-color" content="#14532d">
+<meta property="og:title" content="{E(title)}"><meta property="og:description" content="{E(desc)}"><meta property="og:type" content="website"><meta property="og:url" content="{BASE+path}"><meta property="og:image" content="{BASE}/og.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="stylesheet" href="/theme.css">
+{'<script type="application/ld+json">'+ldj+'</script>' if ldj else ''}</head>
+<body><header class="site"><div class="w"><div class="nav"><a class="brand" href="/">🌾 MandiRates</a><nav aria-label="Main">{nav}</nav>
+<div class="ctl"><label class="vh" for="th">Colour theme</label><select id="th"><option value="forest">Forest</option><option value="leaf">Leaf</option><option value="sun">Earth</option><option value="ocean">Teal</option></select><button id="md" type="button" aria-label="Toggle dark mode">🌙</button><button id="lg" type="button">हिन्दी</button></div></div>
+<div class="band">{cr}<h1{h1a}>{E(h1)}</h1><p class="lead">{lead}</p>{hero}</div></div></header>
+<main class="w">{banner}{body}</main>
+<footer class="site"><div class="w"><div class="fl"><a href="/about/">About</a><a href="/contact/">Contact</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a><a href="/disclaimer/">Disclaimer</a><a href="/poster/">Poster</a></div>
+<p>Source: Government of India open data (data.gov.in). Prices are indicative; confirm with the mandi before you trade. © MandiRates</p></div></footer>{sc}</body></html>'''
+def table(rows,idn='pt',cols=('Mandi','Variety','Min','Modal','Max','Per kg','Date')):
+    th=''.join(f'<th>{c}</th>' for c in cols)
+    b=''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td>{E(x["variety"])}</td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}</td><td>{rs(x["mx"])}</td><td>₹{x["md"]/100:.2f}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(rows))
+    return f'<div class="tw"><table id="{idn}"><thead><tr>{th}</tr></thead><tbody>{b}</tbody></table></div>'
+# ---------- main ----------
 def main():
-    if KEY:
+    if KEY and not TESTLIVE:
         try:raw=fetch()
         except Exception as ex:sys.exit(f'Feed failed, site left unchanged: {ex}')
     else:raw=json.load(open(DATA,encoding='utf-8'))
     rows=clean(raw)
     if not rows:sys.exit('No valid rows, site left unchanged')
-    os.makedirs(OUT,exist_ok=True)
-    open(os.path.join(OUT,'style.css'),'w').write(open('scripts/style.css').read())
-    urls=['/','/marketplace.html'];R='/mandi-prices/'
+    if os.path.isdir(OUT):shutil.rmtree(OUT)
+    os.makedirs(OUT)
     S=collections.defaultdict(lambda:collections.defaultdict(lambda:collections.defaultdict(list)))
     for r in rows:S[r['state']][r['district']][r['commodity']].append(r)
-    page(R,'Mandi Prices Today by State | MandiRates','Browse today\'s mandi prices by state, district and crop across India.',[('Home','/'),('Mandi prices',R)],'Mandi prices by state',f'Choose a state to see today\'s mandi prices. {len(rows)} price records across {len(S)} states.','<ul class="list">'+''.join(f'<li><a href="{R}{slug(s)}/">{e(s)}</a> ({sum(len(d) for d in S[s].values())} crop listings)</li>' for s in sorted(S))+'</ul>');urls.append(R)
+    cropn=collections.Counter(r['commodity'] for r in rows);top40={c for c,_ in cropn.most_common(40)}
+    cand=[(len(S[s][d][c]),s,d,c) for s in S for d in S[s] for c in S[s][d] if len(S[s][d][c])>=2 or c in top40]
+    cand.sort(key=lambda x:-x[0]);fixed=len(S)+sum(len(S[s]) for s in S)+len([c for c in cropn if cropn[c]>=3])+20
+    allowed={(s,d,c) for _,s,d,c in cand[:max(0,MAX_PAGES-fixed)]}
+    dates=[dt(r['date']) for r in rows if dt(r['date']).year>1970];latest=max(dates).strftime('%d/%m/%Y') if dates else ''
+    iso=max(dates).strftime('%Y-%m-%d') if dates else datetime.date.today().isoformat()
+    # history: only on real runs
+    SD={}
+    if not DEMO:
+        for s in S:
+            keep=[x for d in S[s] for c in S[s][d] if (s,d,c) in allowed for x in S[s][d][c]]
+            SD[s]=merge_series(s,keep,iso)
+    else:
+        for s in S:SD[s]={'d':[],'v':{}}
+    R='/mandi-prices/';home=[('Home','/')];root=home+[('Mandi prices',R)]
+    # home
+    top_rows=[max((r for r in rows if r['commodity']==c),key=lambda r:r['md']) for c,_ in cropn.most_common(15)]
+    sc=''.join(f'<a href="{R}{slug(s)}/">{E(s)}</a>' for s in sorted(S,key=lambda x:-sum(len(v) for v in S[x].values()))[:12])
+    hero=f'''<div class="cta"><a class="btn" href="/marketplace/">+ Sell produce</a><a class="btn o" href="/marketplace/">+ Post requirement</a></div>
+<form class="bar" id="sf" role="search"><div><label class="vh" for="st">State</label><select id="st"><option value="">All states</option></select></div><div><label class="vh" for="q">Search crop or mandi</label><input id="q" type="search" placeholder="Crop or mandi: wheat, Indore…" autocomplete="off" maxlength="40"></div><button class="btn" type="submit">Search prices</button></form>'''
+    body=f'''<div class="tiles"><a class="card" href="/compare/"><span class="ic">⚖️</span><span><b>Compare 8 mandis</b><small>Free, with CSV</small></span></a><a class="card" href="/tools/#sell"><span class="ic">🚚</span><span><b>Where to sell</b><small>After transport cost</small></span></a><a class="card" href="/tools/#trend"><span class="ic">📈</span><span><b>Price trends</b><small>High or low today?</small></span></a><a class="card" href="/tools/#alerts"><span class="ic">🔔</span><span><b>Price alerts</b><small>Set your price</small></span></a></div>
+<div class="cols"><section class="card" id="prices"><h2>Today’s mandi prices</h2><p class="hint">₹ per quintal · <span id="upd">{('Latest data: '+latest) if latest else ''}</span></p><div class="tw"><table id="pt"><thead><tr><th>Crop</th><th>Mandi</th><th>State</th><th>Min</th><th>Modal</th><th>Max</th><th>Change</th><th>Date</th></tr></thead><tbody id="tb">{''.join(f'<tr><td>{E(r["commodity"])}</td><td>{E(r["market"])}</td><td>{E(r["state"])}</td><td>{rs(r["mn"])}</td><td class="p">{rs(r["md"])}</td><td>{rs(r["mx"])}</td><td>–</td><td>{E(r["date"])}</td></tr>' for r in top_rows)}</tbody></table></div><p class="hint" id="cnt"></p><button class="btn g s" id="more" type="button" hidden>Show more</button> <button class="btn g s" type="button" data-csv="pt" data-name="mandi-prices.csv">Download CSV</button></section>
+<aside class="card"><h2 id="mvt">Highest prices today</h2><ul class="mv" id="mv"></ul></aside></div>
+<section class="card"><h2>Browse by state</h2><p class="hint">Choose a state, then a district, then a crop.</p><div class="chips">{sc}<a href="{R}">All states →</a></div></section>
+<section class="card app"><div><h2>Use MandiRates like an app</h2><p class="hint">Open the browser menu and choose “Add to Home screen”. Last prices still show offline.</p></div><a class="btn" href="/marketplace/">Buy and sell produce</a></section>'''
+    faq=[("How do I find the best mandi to sell my crop?","Use the Where to sell tool: choose your crop, quantity and location. It ranks mandis by the money you keep after transport."),("Where do these prices come from?","Prices come from the Government of India open data portal (data.gov.in), which publishes Agmarknet mandi prices. Each price shows its date."),("Is MandiRates free?","Yes. Prices, comparison of up to 8 mandis and CSV download are free.")]
+    fld=[{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":q,"acceptedAnswer":{"@type":"Answer","text":a}} for q,a in faq]}]
+    body+='<section class="card"><h2>Common questions</h2>'+''.join(f'<details><summary>{E(q)}</summary><p>{E(a)}</p></details>' for q,a in faq)+'</section>'
+    write('/',shell('/','Mandi Bhav Today: Live Mandi Prices India | MandiRates','Today’s mandi prices across India. Compare mandis, see trends, and post produce to sell or a requirement to buy. Free and fast.','Mandi bhav today across India','Compare mandis, see who pays the most, and buy or sell produce. Free, fast, and works on slow networks.',body,None,fld,('js/home.js',),hero,hi='आज का मंडी भाव, पूरे भारत में'))
+    # inner tool pages
+    write('/compare/',shell('/compare/','Compare Mandi Prices (Up to 8 Mandis) | MandiRates','Compare up to 8 mandis for the same crop, see who pays the most, and download the comparison as CSV. Free.','Compare up to 8 mandis for one crop','See who pays the most today and by how much. Free, with CSV download.',
+     '<section class="card"><div class="row"><div><label for="cr">Crop</label><select id="cr"></select></div><div><label for="mf">Find a mandi</label><input id="mf" type="search" maxlength="40" placeholder="Type a mandi or state"></div></div><p class="mut">Tick up to 8 mandis. The 60 highest-priced mandis are listed; search to find others.</p><div class="pick" id="pk"></div><div class="big" id="sm" aria-live="polite"></div><div class="tw"><table><thead><tr><th>Mandi</th><th>Min</th><th>Modal</th><th>Max</th><th>Below best</th><th>Compare</th></tr></thead><tbody id="tb"></tbody></table></div><p><button class="btn" id="dl" type="button">Download CSV</button></p></section>',
+     home+[('Compare','/compare/')],None,('js/compare.js',)))
+    write('/tools/',shell('/tools/','Trader Tools: Where to Sell, Trends, Alerts, Profit | MandiRates','Free tools for traders and farmers: best mandi after transport cost, price trend signal, price alerts and a profit calculator.','Tools for traders and farmers','Pick the best mandi, check if today’s price is high or low, and calculate your real profit.',
+     '''<div class="two"><section class="card" id="sell"><h2>Where to sell</h2><p class="hint">Ranks mandis by money left after transport.</p><div class="row"><div><label for="sc">Crop</label><select id="sc"></select></div><div><label for="sq">Quintals</label><input id="sq" type="number" min="1" value="100"></div></div><div class="row"><div><label for="so">Your nearest city</label><select id="so"></select></div><div><label for="sr">Transport ₹ per quintal per 100 km</label><input id="sr" type="number" min="0" value="60"></div></div><div id="so2" aria-live="polite"></div></section>
+<section class="card" id="trend"><h2>Price trend and signal</h2><p class="hint">Is today’s price high or low for this crop and mandi?</p><div class="row"><div><label for="tc">Crop and mandi</label><select id="tc"></select></div></div><div id="tsv"></div><div id="to" aria-live="polite"></div></section></div>
+<div class="two mt"><section class="card" id="alerts"><h2>Price alerts</h2><p class="hint">Saved on this device. Alerts show here when you open the site. WhatsApp alerts need accounts (coming later).</p><div class="row"><div><label for="ac">Crop and mandi</label><select id="ac"></select></div><div><label for="ad">When price is</label><select id="ad"><option value="above">above</option><option value="below">below</option></select></div><div><label for="at">₹ per quintal</label><input id="at" type="number" min="1" value="2500"></div></div><button class="btn" id="aa" type="button">Add alert</button><ul class="al" id="al"></ul></section>
+<section class="card"><h2>Trader profit calculator</h2><p class="hint">Buy, sell, transport and commission in one place.</p><div class="row"><div><label for="b">Buy ₹/qtl</label><input id="b" type="number" min="0" value="2200"></div><div><label for="s">Sell ₹/qtl</label><input id="s" type="number" min="0" value="2400"></div><div><label for="n">Quintals</label><input id="n" type="number" min="0" value="100"></div></div><div class="row"><div><label for="t">Transport ₹</label><input id="t" type="number" min="0" value="3000"></div><div><label for="c">Commission %</label><input id="c" type="number" min="0" max="20" step="0.1" value="1"></div></div><div id="po" aria-live="polite"></div></section></div>''',
+     home+[('Tools','/tools/')],None,('js/tools.js',)))
+    write('/marketplace/',shell('/marketplace/','Buy and Sell Farm Produce in India | MandiRates','Post your produce free, find genuine buyers and sellers across India, and check mandi rates before you deal.','Buy and sell farm produce, no middleman','Post your produce or requirement free. Compare with today’s mandi rate before you agree a price.',
+     '''<div class="note" id="dm">Demo: these listings are samples saved only on this device. Real listings need sign-in and a secure database, which are being set up.</div><section class="card" id="auth" hidden><h2 id="ah">Sign in</h2><p class="hint" id="ahint">Sign in with your mobile number to post listings and see contacts.</p><div class="row" id="a1"><div><label for="ap">Mobile number</label><input id="ap" inputmode="numeric" maxlength="10" autocomplete="tel-national"></div><div><button class="btn" id="as" type="button">Send OTP</button></div></div><div class="row" id="a2" hidden><div><label for="ao">OTP code</label><input id="ao" inputmode="numeric" maxlength="8" autocomplete="one-time-code"></div><div><button class="btn" id="av" type="button">Verify</button></div></div><p class="err" id="ae" role="alert"></p><p class="mut" id="au"></p><button class="btn g s" id="so" type="button" hidden>Sign out</button></section><div class="tabs" role="tablist"><button type="button" role="tab" id="t1" aria-selected="true">Browse deals</button><button type="button" role="tab" id="t2" aria-selected="false">Post produce to sell</button><button type="button" role="tab" id="t3" aria-selected="false">Post what I need to buy</button></div>
+<section id="p1" class="card"><div class="row"><div><label for="ft">I want to see</label><select id="ft"><option value="">Everything</option><option value="sell">Produce for sale</option><option value="buy">Buyer requirements</option></select></div><div><label for="fc">Crop</label><select id="fc"><option value="">All crops</option></select></div><div><label for="fs">State</label><select id="fs"><option value="">All states</option></select></div><div><label for="fq">Search</label><input id="fq" type="search" maxlength="40" placeholder="e.g. basmati"></div></div>
+<label class="chk"><input type="checkbox" id="pm"><span>Preview as a Premium member (demo): shows every contact number</span></label><p class="mut"><span id="st1"></span> · <span id="st2"></span> · <span id="cnt" aria-live="polite"></span></p><div class="grid" id="ls"></div></section>
+<section id="p2" class="card" hidden><h2 id="fh">Post your produce</h2><form id="f" novalidate><div class="row"><div><label for="c">Crop</label><input id="c" maxlength="40" required placeholder="Wheat"></div><div><label for="q">Quantity (quintals)</label><input id="q" type="number" min="1" required></div><div><label for="p">Price ₹ per quintal</label><input id="p" type="number" min="1" required></div></div><div class="row"><div><label for="s">State</label><input id="s" maxlength="40" required placeholder="Punjab"></div><div><label for="d">District</label><input id="d" maxlength="40" placeholder="Ludhiana"></div><div id="phw"><label for="ph">Mobile number</label><input id="ph" inputmode="numeric" maxlength="10" required placeholder="10 digits"></div></div><div><label for="n">Details (variety, quality, delivery)</label><textarea id="n" rows="3" maxlength="300"></textarea></div>
+<label class="chk"><input type="checkbox" id="cs"><span>I agree that my number is shown only to people who unlock it, and that I will not post false rates or quantities.</span></label><p class="err" id="er" role="alert"></p><button class="btn" type="submit">Post for free</button></form></section>''',
+     home+[('Buy / Sell','/marketplace/')],None,('config.js','js/market.js'),connect='https://*.supabase.co'))
+    # legal
+    D=datetime.date.today().strftime('%d %B %Y')
+    def legal(p,t,h,paras):write(p,shell(p,t+' | MandiRates',h,t,h,'<section class="card">'+''.join(f'<p>{x}</p>' if not x.startswith('#') else f'<h2>{E(x[1:])}</h2>' for x in paras)+f'<p class="mut">Last updated: {D}</p></section>',home+[(t,p)]))
+    legal('/about/','About MandiRates','MandiRates gives farmers and traders free, simple access to mandi prices.',['MandiRates shows daily mandi prices from the Government of India open data portal, helps you compare mandis, and lets buyers and sellers find each other.','#Our promise','We show the source and date of every price, we never invent prices, and we keep the site fast and free to use.'])
+    legal('/privacy/','Privacy Policy','How MandiRates handles your information.',['#What we collect','The price pages need no account. Choices such as your colour theme, language, watchlist and alerts are saved only in your own browser. If you post a listing, the details you enter, including your mobile number, are used to run the marketplace.','#Phone numbers','Your number is hidden from other visitors and shown only through the unlock rules of the marketplace. Do not post anyone else’s number.','#Your choices','You can clear saved choices by clearing your browser data. To ask us to remove a listing or data, use the contact details on the Contact page.'])
+    legal('/terms/','Terms of Use','The rules for using MandiRates.',['By using MandiRates you agree to use it lawfully and honestly.','#Listings','You are responsible for the accuracy of what you post. Do not post false prices, quantities or contact details. We may hide or remove listings that are reported or look unsafe.','#No guarantee','MandiRates is not a party to any deal. Check the other person, the goods and the payment yourself before you trade.'])
+    legal('/disclaimer/','Disclaimer','Prices on MandiRates are indicative.',['Prices come from government open data and can be delayed or incomplete. Always confirm the final rate with the mandi before you load, buy or sell.','Trend signals and calculators are simple aids, not financial or trading advice. Actual transport costs and commissions will differ.'])
+    cm=f'You can write to us at <a href="mailto:{E(CONTACT)}">{E(CONTACT)}</a>.' if CONTACT else 'Our contact email will be added here soon. For a problem with a marketplace listing, use the Report button on that listing.'
+    legal('/contact/','Contact Us','How to reach MandiRates.',[cm])
+    write('/poster/',shell('/poster/','Poster: Check Mandi Prices Free | MandiRates','Printable poster for mandis and farmer groups.','Printable poster','Print this page and put it up at your mandi, shop or farmer group.',
+     f'<section class="card"><div class="poster"><h2>Check mandi prices free</h2><p class="pt">आज का मंडी भाव मुफ़्त देखें</p><ul><li>Prices from mandis across India</li><li>Compare up to 8 mandis</li><li>Find the best place to sell</li><li>Buy and sell produce</li></ul><div class="url">{BASE.replace("https://","")}</div></div><p class="noprint"><button class="btn" type="button" id="pp">Print poster</button></p></section>',home+[('Poster','/poster/')],None,('js/poster.js',),index=False))
+    write('/404.html',shell('/404.html','Page not found | MandiRates','This page does not exist.','Page not found','The page you opened does not exist. Try the price pages.','<section class="card"><p><a class="btn" href="/mandi-prices/">See mandi prices</a></p></section>',None,None,(),index=False))
+    # silo
+    topc=[c for c,_ in cropn.most_common(30) if cropn[c]>=3]
+    write(R,shell(R,'Mandi Prices by State, District and Crop | MandiRates','Browse today’s mandi prices by state, district and crop across India.','Mandi prices by state','Choose a state to see its districts and crops, or pick a crop to see prices across India.',
+      '<section class="card"><h2>States</h2><div class="chips">'+''.join(f'<a href="{R}{slug(s)}/">{E(s)}</a>' for s in sorted(S))+'</div></section><section class="card"><h2>Popular crops</h2><div class="chips">'+''.join(f'<a href="{R}crop/{slug(c)}/">{E(c)}</a>' for c in topc)+'</div></section>',root))
+    for c in cropn:
+        if cropn[c]<3:continue
+        L=sorted([r for r in rows if r['commodity']==c],key=lambda r:-r['md'])[:25];cp=f'{R}crop/{slug(c)}/';top=L[0]
+        ans=f'The highest {c} price today is {rs(top["md"])} per quintal at {top["market"]}, {top["state"]}.'
+        b=f'<section class="card"><p class="big">{E(ans)}</p><div class="tw"><table id="pt"><thead><tr><th>Mandi</th><th>State</th><th>Min</th><th>Modal</th><th>Max</th><th>Date</th></tr></thead><tbody>'+''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td><a href="{R}{slug(x["state"])}/">{E(x["state"])}</a></td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}</td><td>{rs(x["mx"])}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(L))+f'</tbody></table></div><p><a class="btn g s" href="/compare/?crop={E(c)}">Compare mandis</a> <button class="btn g s" type="button" data-csv="pt" data-name="{slug(c)}-prices.csv">Download CSV</button></p></section>'
+        write(cp,shell(cp,f'{c} Price Today in India (Mandi Bhav) | MandiRates',ans[:155],f'{c} price today in India',ans,b,root+[(c,cp)],[{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":f"What is the highest {c} price today?","acceptedAnswer":{"@type":"Answer","text":ans}}]}],('js/csv.js',)))
     for s in sorted(S):
-        sp=f'{R}{slug(s)}/'
-        page(sp,f'Mandi Prices in {s} Today | MandiRates',f'Today\'s mandi prices in {s} by district and crop, per quintal.',[('Home','/'),('Mandi prices',R),(s,sp)],f'Mandi prices in {s}',f'Select a district in {e(s)} to see today\'s crop rates per quintal.','<ul class="list">'+''.join(f'<li><a href="{sp}{slug(d)}/">{e(d)}</a> ({len(S[s][d])} crops)</li>' for d in sorted(S[s]))+'</ul>');urls.append(sp)
-        for d in sorted(S[s]):
-            dp=f'{sp}{slug(d)}/'
-            page(dp,f'Mandi Prices in {d}, {s} Today | MandiRates',f'Today\'s mandi rates in {d}, {s}: crop prices per quintal.',[('Home','/'),('Mandi prices',R),(s,sp),(d,dp)],f'Mandi prices in {d}, {s}',f'Latest crop prices in {e(d)} district, per quintal.','<ul class="list">'+''.join(f'<li><a href="{dp}{slug(c)}/">{e(c)}</a>: {rs(max(x["md"] for x in S[s][d][c]))} (highest modal)</li>' for c in sorted(S[s][d]))+'</ul>');urls.append(dp)
+        sp=f'{R}{slug(s)}/';ds=sorted(S[s]);scr=root+[(s,sp)]
+        write(sp,shell(sp,f'Mandi Prices in {s} Today | MandiRates',f'Today’s mandi prices in {s} by district and crop, per quintal.',f'Mandi prices in {s}',f'Choose a district in {E(s)} to see today’s crop rates per quintal.','<section class="card"><div class="chips">'+''.join(f'<a href="{sp}{slug(d)}/">{E(d)} ({len(S[s][d])})</a>' for d in ds)+'</div></section>',scr))
+        for d in ds:
+            dp=f'{sp}{slug(d)}/';dcr=scr+[(d,dp)];items=''
             for c in sorted(S[s][d]):
+                m=max(x['md'] for x in S[s][d][c]);items+=f'<li><div>{(f"<a href=\"{dp}{slug(c)}/\">{E(c)}</a>") if (s,d,c) in allowed else E(c)}</div><div class="p">{rs(m)}</div></li>'
+            write(dp,shell(dp,f'Mandi Prices in {d}, {s} Today | MandiRates',f'Today’s mandi rates in {d}, {s}: crop prices per quintal.',f'Mandi prices in {d}, {s}',f'Latest crop prices in {E(d)} district, per quintal.',f'<section class="card"><h2>Crops</h2><p class="hint">Highest modal price in this district</p><ul class="mv">{items}</ul></section>',dcr))
+            for c in sorted(S[s][d]):
+                if (s,d,c) not in allowed:continue
                 L=sorted(S[s][d][c],key=lambda x:-x['md']);cp=f'{dp}{slug(c)}/';top=L[0];low=min(x['mn'] for x in L);high=max(x['mx'] for x in L);date=max((x['date'] for x in L),key=dt)
-                ans=f'{e(c)} price in {e(d)} district today is {rs(top["md"])} per quintal (modal) at {e(top["market"])} mandi, ranging {rs(low)} to {rs(high)} across {len(L)} listing{"s" if len(L)>1 else ""}. Last updated {e(date)}.'
-                plain=f'{c} price in {d} district today is {rs(top["md"])} per quintal (modal) at {top["market"]} mandi, ranging {rs(low)} to {rs(high)}. Last updated {date}.'
-                tb='<div class="tw"><table><thead><tr><th>Mandi</th><th>Variety</th><th>Min</th><th>Modal</th><th>Max</th><th>Per kg</th><th>Date</th></tr></thead><tbody>'+''.join(f'<tr{" class=best" if i==0 else ""}><td>{e(x["market"])}</td><td>{e(x["variety"])}</td><td>{rs(x["mn"])}</td><td>{rs(x["md"])}</td><td>{rs(x["mx"])}</td><td>₹{x["md"]/100:.2f}</td><td>{e(x["date"])}</td></tr>' for i,x in enumerate(L))+'</tbody></table></div><p><a href="prices.csv" download>Download CSV</a> · Highest modal price is shaded.</p>'
-                faq={"@type":"FAQPage","mainEntity":[{"@type":"Question","name":f"What is the {c} price in {d} today?","acceptedAnswer":{"@type":"Answer","text":plain}}]}
-                page(cp,f'{c} Price in {d}, {s} Today | MandiRates',plain[:155],[('Home','/'),('Mandi prices',R),(s,sp),(d,dp),(c,cp)],f'{c} price in {d} today',ans,tb,[faq]);urls.append(cp)
-                with open(os.path.join(OUT,cp.strip('/'),'prices.csv'),'w',newline='',encoding='utf-8') as f:
-                    w=csv.writer(f);w.writerow(['state','district','market','commodity','variety','date','min','modal','max'])
-                    for x in L:w.writerow([x['state'],x['district'],x['market'],x['commodity'],x['variety'],x['date'],x['mn'],x['md'],x['mx']])
-    for f in('index.html','marketplace.html','robots.txt','_headers'):open(os.path.join(OUT,f),'w',encoding='utf-8').write(open(f,encoding='utf-8').read())
-    t=datetime.date.today().isoformat()
-    open(os.path.join(OUT,'sitemap.xml'),'w').write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+''.join(f'<url><loc>{BASE+u}</loc><lastmod>{t}</lastmod></url>' for u in urls)+'</urlset>')
-    print(f'Built {len(urls)} pages from {len(rows)} valid rows ({len(raw)-len(rows)} dropped)')
+                plain=f'{c} price in {d} district today is {rs(top["md"])} per quintal (modal) at {top["market"]} mandi, ranging {rs(low)} to {rs(high)} across {len(L)} listing{"s" if len(L)>1 else ""}. Last updated {date}.'
+                ch=svg_chart(series_for(SD[s],top) or [],f'{c} price trend at {top["market"]}')
+                hist=f'<section class="card"><h2>Price trend at {E(top["market"])}</h2>{ch}</section>' if ch else f'<section class="card"><h2>Price trend</h2><p class="mut">History builds one day at a time. A chart appears here after a few days of saved prices.</p></section>'
+                b=f'<section class="card"><p class="big">{E(plain)}</p>{table(L)}<p><a class="btn g s" href="/compare/?crop={E(c)}">Compare mandis</a> <button class="btn g s" type="button" data-csv="pt" data-name="{slug(c)}-{slug(d)}.csv">Download CSV</button></p></section>{hist}<section class="card"><h2>Frequently asked</h2><details open><summary>What is the {E(c)} price in {E(d)} today?</summary><p>{E(plain)}</p></details><details><summary>Where does this price come from?</summary><p>From the Government of India open data portal (Agmarknet). Confirm with the mandi before you trade.</p></details></section>'
+                write(cp,shell(cp,f'{c} Price in {d}, {s} Today | MandiRates',plain[:155],f'{c} price in {d} today',E(plain),b,dcr+[(c,cp)],[{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":f"What is the {c} price in {d} today?","acceptedAnswer":{"@type":"Answer","text":plain}}]}],('js/csv.js',)))
+    # data + static
+    os.makedirs(os.path.join(OUT,'data'),exist_ok=True)
+    json.dump({'demo':DEMO,'updated':latest,'rows':rows},open(os.path.join(OUT,'data','latest.json'),'w',encoding='utf-8'),ensure_ascii=False,separators=(',',':'))
+    if not DEMO and os.path.isdir(SERIES_DIR):shutil.copytree(SERIES_DIR,os.path.join(OUT,'data','series'))
+    src=os.path.join(ROOT,'src')
+    for f in('theme.css','app.js','logic.js','hi.js'):shutil.copy(os.path.join(src,f),OUT)
+    shutil.copytree(os.path.join(src,'js'),os.path.join(OUT,'js'))
+    open(os.path.join(OUT,'js','csv.js'),'w').write('')  # CSV buttons are wired by app.js
+    open(os.path.join(OUT,'js','poster.js'),'w').write("document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('pp');if(b)b.addEventListener('click',function(){window.print()})});")
+    for f in('manifest.webmanifest','icon.svg','robots.txt','_headers','icon-192.png','icon-512.png','og.png','config.js'):
+        p=os.path.join(ROOT,'static',f)
+        if os.path.exists(p):shutil.copy(p,OUT)
+    sw=open(os.path.join(ROOT,'static','sw.js')).read().replace('__BUILD__',BUILD);open(os.path.join(OUT,'sw.js'),'w').write(sw)
+    smu=[u for u in written if u!='/404.html' and u!='/poster/']
+    open(os.path.join(OUT,'sitemap.xml'),'w').write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+''.join(f'<url><loc>{BASE+u}</loc><lastmod>{datetime.date.today().isoformat()}</lastmod></url>' for u in smu)+'</urlset>')
+    print(f'Built {len(written)} pages from {len(rows)} valid rows ({len(raw)-len(rows)} dropped); demo={DEMO}')
 if __name__=='__main__':main()
