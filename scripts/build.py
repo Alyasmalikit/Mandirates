@@ -12,28 +12,40 @@ E=lambda s:html.escape(str(s),quote=True)
 def slug(s):return re.sub(r'[^a-z0-9]+','-',str(s).lower()).strip('-') or 'na'
 def rs(v):return '₹'+format(int(v),',d')
 UA='Mozilla/5.0 (compatible; MandiRates-build/1.0)';WAIT=float(os.environ.get('RETRY_WAIT','3'));PROXY=os.environ.get('PRICES_PROXY','')
-def http_json(url,tries=3):
-    last=None
+def why(ex):
+    code=getattr(ex,'code',None)
+    if code:
+        try:body=ex.read().decode('utf-8','ignore')[:120]
+        except Exception:body=''
+        if KEY:body=body.replace(KEY,'***')
+        return f'HTTP {code} {body}'.strip()
+    r=getattr(ex,'reason',None)
+    return f'{type(ex).__name__}: {r}' if r else type(ex).__name__
+def http_json(url,tries=3,wait=None):
+    last=None;w=WAIT if wait is None else wait
     for i in range(tries):
         try:
             with urlopen(Request(url,headers={'User-Agent':UA,'Accept':'application/json'}),timeout=40) as r:return json.load(r)
         except Exception as ex:
-            last=ex;time.sleep(WAIT*(i+1))
+            last=ex
+            if i<tries-1:time.sleep(w*(i+1))
     raise last
-def fetch_pages(make):
+def fetch_pages(make,tries=3,wait=None):
     rows=[];off=0
     while off<60000:
-        d=http_json(make(off));rec=d.get('records',[])
+        d=http_json(make(off),tries,wait);rec=d.get('records',[])
         if not rec:break
         rows+=rec;off+=1000
+        tot=d.get('total')
+        if isinstance(tot,int) and off>=tot:break
     return rows
 def fetch():
     direct=lambda off:f'https://api.data.gov.in/resource/{RID}?'+urlencode({'api-key':KEY,'format':'json','limit':1000,'offset':off})
-    try:return fetch_pages(direct)
+    try:return fetch_pages(direct,2)
     except Exception as e1:
         proxy=PROXY or BASE+'/api/prices'
-        try:rows=fetch_pages(lambda off:proxy+'?'+urlencode({'limit':1000,'offset':off}))
-        except Exception as e2:raise Exception(f'direct fetch failed ({type(e1).__name__}) and the Cloudflare route failed ({type(e2).__name__})')
+        try:rows=fetch_pages(lambda off:proxy+'?'+urlencode({'limit':1000,'offset':off}),5,WAIT*2 if WAIT else 0)
+        except Exception as e2:raise Exception(f'direct fetch failed ({why(e1)}) and the Cloudflare route failed ({why(e2)})')
         if not rows:raise Exception('the Cloudflare route returned no rows')
         return rows
 def num(v):
