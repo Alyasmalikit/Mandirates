@@ -1,0 +1,26 @@
+const fs=require('fs');const h=fs.readFileSync('index.html','utf8');let p=0,f=0;const t=(n,c)=>{c?p++:f++;console.log(c?'PASS':'FAIL',n)};
+const L=new Function(h.split('/*LOGIC*/')[1].split('/*END*/')[0]+';return{netProfit,hav,series,stats,signal,rank,sortRows,filt,triggered}')();
+t('profit 14600',Math.round(L.netProfit(2200,2400,100,3000,1).net)===14600);
+t('empty inputs safe',!isNaN(L.netProfit('','','','','').net));
+const d=L.hav(30.90,75.85,22.72,75.86);t('Ludhiana-Indore distance ~910 km',d>880&&d<940);
+t('distance to self is 0',L.hav(10,10,10,10)<1e-6);
+const s=L.series(2400,1077);t('series 30 pts, ends at base',s.length===30&&s[29]===2400);
+t('series deterministic',JSON.stringify(s)===JSON.stringify(L.series(2400,1077)));
+t('series stays within 40% of base',s.every(v=>v>1440&&v<3360));
+const st=L.stats([10,20,30]);t('stats avg/min/max',st.avg===20&&st.min===10&&st.max===30&&Math.round(st.vs)===50);
+t('signal high',/^High/.test(L.signal(5)));t('signal low',/^Low/.test(L.signal(-5)));t('signal near',/Near/.test(L.signal(0)));
+const rows=[{c:'W',m:'A',s:'X',p:2400,la:30,lo:75},{c:'W',m:'B',s:'Y',p:2500,la:22,lo:75},{c:'R',m:'C',s:'X',p:9,la:30,lo:75}];
+let r=L.rank(rows,'W',100,30,75,60,1.3);t('rank only chosen crop',r.length===2);
+t('nearest has zero transport',Math.abs(r.find(x=>x.m==='A').cost)<1e-6);
+t('far mandi pays net less when transport high',L.rank(rows,'W',100,30,75,500,1.3)[0].m==='A');
+t('far mandi wins when transport cheap',L.rank(rows,'W',100,30,75,1,1.3)[0].m==='B');
+t('sorted best first',r[0].net>=r[1].net);
+t('triggered above',L.triggered({dir:'above',t:100},101)&&!L.triggered({dir:'above',t:100},99));
+t('triggered below',L.triggered({dir:'below',t:100},99)&&!L.triggered({dir:'below',t:100},101));
+t('filter watchlist',L.filt(rows,'','','1',['W|B']).length===1);
+t('sort desc',L.sortRows(rows,'p',false)[0].p===2500);
+const ld=JSON.parse(h.match(/ld\+json">([\s\S]*?)<\/script>/)[1]);t('JSON-LD valid',!!ld['@graph']);
+t('one h1',(h.match(/<h1/g)||[]).length===1);t('no innerHTML',!/innerHTML/.test(h));
+t('no external src/href',!/(src|href)="https?:\/\/(?!mandirates)/.test(h));
+t('every input has a label',[...h.matchAll(/<(?:input|select) id="(\w+)"/g)].every(m=>h.includes('for="'+m[1]+'"')));
+t('size <30KB',Buffer.byteLength(h)<30000);console.log(`${p} passed, ${f} failed, ${Buffer.byteLength(h)} bytes`);process.exit(f?1:0)

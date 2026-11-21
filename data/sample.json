@@ -1,0 +1,189 @@
+[
+ {
+  "state": "Punjab",
+  "district": "Ludhiana",
+  "market": "Ludhiana",
+  "commodity": "Wheat",
+  "variety": "Dara",
+  "arrival_date": "14/11/2026",
+  "min_price": 2380,
+  "max_price": 2470,
+  "modal_price": 2425
+ },
+ {
+  "state": "Punjab",
+  "district": "Ludhiana",
+  "market": "Khanna",
+  "commodity": "Wheat",
+  "variety": "Dara",
+  "arrival_date": "14/11/2026",
+  "min_price": 2400,
+  "max_price": 2480,
+  "modal_price": 2440
+ },
+ {
+  "state": "Punjab",
+  "district": "Ludhiana",
+  "market": "Ludhiana",
+  "commodity": "Rice",
+  "variety": "Basmati",
+  "arrival_date": "14/11/2026",
+  "min_price": 3100,
+  "max_price": 3400,
+  "modal_price": 3250
+ },
+ {
+  "state": "Punjab",
+  "district": "Amritsar",
+  "market": "Amritsar",
+  "commodity": "Wheat",
+  "variety": "Dara",
+  "arrival_date": "14/11/2026",
+  "min_price": 2390,
+  "max_price": 2460,
+  "modal_price": 2420
+ },
+ {
+  "state": "Punjab",
+  "district": "Amritsar",
+  "market": "Amritsar",
+  "commodity": "Potato",
+  "variety": "Other",
+  "arrival_date": "14/11/2026",
+  "min_price": 1100,
+  "max_price": 1400,
+  "modal_price": 1250
+ },
+ {
+  "state": "Madhya Pradesh",
+  "district": "Indore",
+  "market": "Indore",
+  "commodity": "Wheat",
+  "variety": "Sharbati",
+  "arrival_date": "14/11/2026",
+  "min_price": 2450,
+  "max_price": 2520,
+  "modal_price": 2480
+ },
+ {
+  "state": "Madhya Pradesh",
+  "district": "Indore",
+  "market": "Indore",
+  "commodity": "Soybean",
+  "variety": "Yellow",
+  "arrival_date": "14/11/2026",
+  "min_price": 4350,
+  "max_price": 4550,
+  "modal_price": 4450
+ },
+ {
+  "state": "Madhya Pradesh",
+  "district": "Indore",
+  "market": "Indore",
+  "commodity": "Onion",
+  "variety": "Red",
+  "arrival_date": "14/11/2026",
+  "min_price": 1600,
+  "max_price": 1800,
+  "modal_price": 1720
+ },
+ {
+  "state": "Madhya Pradesh",
+  "district": "Indore",
+  "market": "Mhow",
+  "commodity": "Onion",
+  "variety": "Red",
+  "arrival_date": "14/11/2026",
+  "min_price": 1580,
+  "max_price": 1760,
+  "modal_price": 1690
+ },
+ {
+  "state": "Maharashtra",
+  "district": "Nashik",
+  "market": "Lasalgaon",
+  "commodity": "Onion",
+  "variety": "Red",
+  "arrival_date": "14/11/2026",
+  "min_price": 1500,
+  "max_price": 1800,
+  "modal_price": 1650
+ },
+ {
+  "state": "Maharashtra",
+  "district": "Nashik",
+  "market": "Nashik",
+  "commodity": "Tomato",
+  "variety": "Local",
+  "arrival_date": "14/11/2026",
+  "min_price": 1900,
+  "max_price": 2300,
+  "modal_price": 2100
+ },
+ {
+  "state": "Karnataka",
+  "district": "Kolar",
+  "market": "Kolar",
+  "commodity": "Tomato",
+  "variety": "Hybrid",
+  "arrival_date": "14/11/2026",
+  "min_price": 1700,
+  "max_price": 2100,
+  "modal_price": 1900
+ },
+ {
+  "state": "Rajasthan",
+  "district": "Alwar",
+  "market": "Alwar",
+  "commodity": "Mustard",
+  "variety": "Yellow",
+  "arrival_date": "14/11/2026",
+  "min_price": 5500,
+  "max_price": 5700,
+  "modal_price": 5600
+ },
+ {
+  "state": "Rajasthan",
+  "district": "Kota",
+  "market": "Kota",
+  "commodity": "Wheat",
+  "variety": "Lokwan",
+  "arrival_date": "14/11/2026",
+  "min_price": 2400,
+  "max_price": 2500,
+  "modal_price": 2450
+ },
+ {
+  "state": "Uttar Pradesh",
+  "district": "Agra",
+  "market": "Agra",
+  "commodity": "Potato",
+  "variety": "Other",
+  "arrival_date": "14/11/2026",
+  "min_price": 1150,
+  "max_price": 1350,
+  "modal_price": 1250
+ },
+ {
+  "state": "Haryana",
+  "district": "Karnal",
+  "market": "Karnal",
+  "commodity": "Rice",
+  "variety": "Basmati",
+  "arrival_date": "14/11/2026",
+  "min_price": 3100,
+  "max_price": 3400,
+  "modal_price": 3250
+ },
+ {
+  "state": "Haryana",
+  "district": "Karnal",
+  "market": "Karnal",
+  "commodity": "Maize",
+  "variety": "Hybrid",
+  "arrival_date": "14/11/2026",
+  "min_price": 0,
+  "max_price": 0,
+  "modal_price": 0
+ }
+]
