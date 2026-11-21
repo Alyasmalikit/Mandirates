@@ -42,6 +42,17 @@ def num(v):
 def dt(s):
     try:return datetime.datetime.strptime(str(s),'%d/%m/%Y')
     except:return datetime.datetime(1970,1,1)
+def mark_odd(rows):
+    g=collections.defaultdict(list)
+    for r in rows:g[r['commodity']].append(r['md'])
+    med={}
+    for c,v in g.items():
+        s=sorted(v);n=len(s);med[c]=(s[n//2] if n%2 else (s[n//2-1]+s[n//2])/2) if n>=5 else 0
+    for r in rows:
+        m=med[r['commodity']];r['odd']=bool(m and (r['md']>3*m or r['md']*3<m))
+    return rows
+def best(L):
+    good=[x for x in L if not x.get('odd')];return (good or L)[0]
 def clean(raw):
     best={}
     for r in raw:
@@ -115,7 +126,7 @@ def shell(path,title,desc,h1,lead,body,crumbs=None,ld=None,scripts=(),hero='',in
 <p>Source: Government of India open data (data.gov.in). Prices are indicative; confirm with the mandi before you trade. © MandiRates</p></div></footer>{sc}</body></html>'''
 def table(rows,idn='pt',cols=('Mandi','Variety','Min','Modal','Max','Per kg','Date')):
     th=''.join(f'<th>{c}</th>' for c in cols)
-    b=''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td>{E(x["variety"])}</td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}</td><td>{rs(x["mx"])}</td><td>₹{x["md"]/100:.2f}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(rows))
+    b=''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td>{E(x["variety"])}</td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}{" ⚠" if x.get("odd") else ""}</td><td>{rs(x["mx"])}</td><td>₹{x["md"]/100:.2f}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(rows))
     return f'<div class="tw"><table id="{idn}"><thead><tr>{th}</tr></thead><tbody>{b}</tbody></table></div>'
 # ---------- main ----------
 def main():
@@ -123,7 +134,7 @@ def main():
         try:raw=fetch()
         except Exception as ex:sys.exit(f'Feed failed, site left unchanged: {ex}')
     else:raw=json.load(open(DATA,encoding='utf-8'))
-    rows=clean(raw)
+    rows=mark_odd(clean(raw))
     if not rows:sys.exit('No valid rows, site left unchanged')
     if os.path.isdir(OUT):shutil.rmtree(OUT)
     os.makedirs(OUT)
@@ -145,7 +156,9 @@ def main():
         for s in S:SD[s]={'d':[],'v':{}}
     R='/mandi-prices/';home=[('Home','/')];root=home+[('Mandi prices',R)]
     # home
-    top_rows=[max((r for r in rows if r['commodity']==c),key=lambda r:r['md']) for c,_ in cropn.most_common(15)]
+    top_rows=[]
+    for c,_ in cropn.most_common(15):
+        g=sorted([r for r in rows if r['commodity']==c and not r['odd']],key=lambda r:r['md']) or sorted([r for r in rows if r['commodity']==c],key=lambda r:r['md']);top_rows.append(g[len(g)//2])
     sc=''.join(f'<a href="{R}{slug(s)}/">{E(s)}</a>' for s in sorted(S,key=lambda x:-sum(len(v) for v in S[x].values()))[:12])
     hero=f'''<div class="cta"><a class="btn" href="/marketplace/">+ Sell produce</a><a class="btn o" href="/marketplace/">+ Post requirement</a></div>
 <form class="bar" id="sf" role="search"><div><label class="vh" for="st">State</label><select id="st"><option value="">All states</option></select></div><div><label class="vh" for="q">Search crop or mandi</label><input id="q" type="search" placeholder="Crop or mandi: wheat, Indore…" autocomplete="off" maxlength="40"></div><button class="btn" type="submit">Search prices</button></form>'''
@@ -193,9 +206,9 @@ def main():
       '<section class="card"><h2>States</h2><div class="chips">'+''.join(f'<a href="{R}{slug(s)}/">{E(s)}</a>' for s in sorted(S))+'</div></section><section class="card"><h2>Popular crops</h2><div class="chips">'+''.join(f'<a href="{R}crop/{slug(c)}/">{E(c)}</a>' for c in topc)+'</div></section>',root))
     for c in cropn:
         if cropn[c]<3:continue
-        L=sorted([r for r in rows if r['commodity']==c],key=lambda r:-r['md'])[:25];cp=f'{R}crop/{slug(c)}/';top=L[0]
+        L=sorted([r for r in rows if r['commodity']==c],key=lambda r:-r['md']);L=([x for x in L if not x['odd']] or L)[:25];cp=f'{R}crop/{slug(c)}/';top=L[0]
         ans=f'The highest {c} price today is {rs(top["md"])} per quintal at {top["market"]}, {top["state"]}.'
-        b=f'<section class="card"><p class="big">{E(ans)}</p><div class="tw"><table id="pt"><thead><tr><th>Mandi</th><th>State</th><th>Min</th><th>Modal</th><th>Max</th><th>Date</th></tr></thead><tbody>'+''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td><a href="{R}{slug(x["state"])}/">{E(x["state"])}</a></td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}</td><td>{rs(x["mx"])}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(L))+f'</tbody></table></div><p><a class="btn g s" href="/compare/?crop={E(c)}">Compare mandis</a> <button class="btn g s" type="button" data-csv="pt" data-name="{slug(c)}-prices.csv">Download CSV</button></p></section>'
+        b=f'<section class="card"><p class="big">{E(ans)}</p><div class="tw"><table id="pt"><thead><tr><th>Mandi</th><th>State</th><th>Min</th><th>Modal</th><th>Max</th><th>Date</th></tr></thead><tbody>'+''.join(f'<tr{" class=best" if i==0 else ""}><td>{E(x["market"])}</td><td><a href="{R}{slug(x["state"])}/">{E(x["state"])}</a></td><td>{rs(x["mn"])}</td><td class="p">{rs(x["md"])}{" ⚠" if x.get("odd") else ""}</td><td>{rs(x["mx"])}</td><td>{E(x["date"])}</td></tr>' for i,x in enumerate(L))+f'</tbody></table></div><p><a class="btn g s" href="/compare/?crop={E(c)}">Compare mandis</a> <button class="btn g s" type="button" data-csv="pt" data-name="{slug(c)}-prices.csv">Download CSV</button></p></section>'
         write(cp,shell(cp,f'{c} Price Today in India (Mandi Bhav) | MandiRates',ans[:155],f'{c} price today in India',ans,b,root+[(c,cp)],[{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":f"What is the highest {c} price today?","acceptedAnswer":{"@type":"Answer","text":ans}}]}],('js/csv.js',)))
     for s in sorted(S):
         sp=f'{R}{slug(s)}/';ds=sorted(S[s]);scr=root+[(s,sp)]
@@ -203,11 +216,11 @@ def main():
         for d in ds:
             dp=f'{sp}{slug(d)}/';dcr=scr+[(d,dp)];items=''
             for c in sorted(S[s][d]):
-                m=max(x['md'] for x in S[s][d][c]);items+=f'<li><div>{(f"<a href=\"{dp}{slug(c)}/\">{E(c)}</a>") if (s,d,c) in allowed else E(c)}</div><div class="p">{rs(m)}</div></li>'
+                m=best(sorted(S[s][d][c],key=lambda x:-x['md']))['md'];items+=f'<li><div>{(f"<a href=\"{dp}{slug(c)}/\">{E(c)}</a>") if (s,d,c) in allowed else E(c)}</div><div class="p">{rs(m)}</div></li>'
             write(dp,shell(dp,f'Mandi Prices in {d}, {s} Today | MandiRates',f'Today’s mandi rates in {d}, {s}: crop prices per quintal.',f'Mandi prices in {d}, {s}',f'Latest crop prices in {E(d)} district, per quintal.',f'<section class="card"><h2>Crops</h2><p class="hint">Highest modal price in this district</p><ul class="mv">{items}</ul></section>',dcr))
             for c in sorted(S[s][d]):
                 if (s,d,c) not in allowed:continue
-                L=sorted(S[s][d][c],key=lambda x:-x['md']);cp=f'{dp}{slug(c)}/';top=L[0];low=min(x['mn'] for x in L);high=max(x['mx'] for x in L);date=max((x['date'] for x in L),key=dt)
+                L=sorted(S[s][d][c],key=lambda x:-x['md']);cp=f'{dp}{slug(c)}/';top=best(L);low=min(x['mn'] for x in L);high=max(x['mx'] for x in L);date=max((x['date'] for x in L),key=dt)
                 plain=f'{c} price in {d} district today is {rs(top["md"])} per quintal (modal) at {top["market"]} mandi, ranging {rs(low)} to {rs(high)} across {len(L)} listing{"s" if len(L)>1 else ""}. Last updated {date}.'
                 ch=svg_chart(series_for(SD[s],top) or [],f'{c} price trend at {top["market"]}')
                 hist=f'<section class="card"><h2>Price trend at {E(top["market"])}</h2>{ch}</section>' if ch else f'<section class="card"><h2>Price trend</h2><p class="mut">History builds one day at a time. A chart appears here after a few days of saved prices.</p></section>'
